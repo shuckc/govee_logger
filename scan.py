@@ -26,7 +26,7 @@ class DeviceFilter():
         return {}
 
     async def do_download(self):
-        return
+        return []
 
     def __repr__(self):
         return f"?? {self.device}"
@@ -51,7 +51,7 @@ class Govee_H5174(DeviceFilter):
         ds, = struct.unpack(">i", b'\x00' + dx[2:5])
         temp = (ds//1000)/10
         humid = (ds%1000)/10
-        print(f"{self} temp={temp} humid={humid} bat={dx[5]}%")
+        print(f" {self} temp={temp} humid={humid} bat={dx[5]}%")
         self.ads.add(dx)
         return {'temp': temp, 'humid': humid, 'bat': dx[5]}
 
@@ -75,7 +75,7 @@ class Govee_H5179(DeviceFilter):
         if dx:
             assert dx[0:4].hex() == 'ec000101'
             temp, humid, bat = struct.unpack("<hhb", dx[4:])
-            print(f"{self} temp={temp/100} humid={humid/100} bat={bat}%")
+            print(f" {self} temp={temp/100} humid={humid/100} bat={bat}%")
             self.ads.add(dx)
             return {'temp': temp/100, 'humid': humid/100, 'bat': bat}
         return {}
@@ -87,8 +87,9 @@ class Govee_H5179(DeviceFilter):
         umisc = '494e5445-4c4c-495f-524f-434b535f2011'
         meta = {}
         await client.start_notify(umisc, functools.partial(self.handler_2011, meta))
-        await client.write_gatt_char(umisc, bytes.fromhex("AA2000000000000000000000000000000000008A"))
+        #await client.write_gatt_char(umisc, bytes.fromhex("AA2000000000000000000000000000000000008A"))
         await client.write_gatt_char(umisc, bytes.fromhex("AA0D0000000000000000000000000000000000A7"))
+        await client.write_gatt_char(umisc, bytes.fromhex("AA0E0000000000000000000000000000000000A7"))
         await asyncio.sleep(0.5)
         await client.stop_notify(umisc)
         await client.disconnect()
@@ -99,9 +100,11 @@ class Govee_H5179(DeviceFilter):
         msgtype = data[0:2]
         value = data[2:-1] # dump checksum
         if msgtype == bytes.fromhex('AA20'):
-            meta['firmware'] = stripnull(value)
+            meta['aa20_ver'] = stripnull(value)
         elif msgtype == bytes.fromhex('AA0D'):
-            meta['hwver'] = stripnull(value)
+            meta['hardware'] = stripnull(value)
+        elif msgtype == bytes.fromhex('AA0E'):
+            meta['firmware'] = stripnull(value)
         else:
             print("!! unknown response")
 
@@ -109,22 +112,22 @@ class Govee_H5179(DeviceFilter):
     async def do_download(self):
         client = BleakClient(self.device.address, timeout=30)
         res = await client.connect()
-        print(f'{self} connected for download')
+        print(f' {self} connected for download')
         ureq = '494e5445-4c4c-495f-524f-434b535f2012'
         ubulk = '494e5445-4c4c-495f-524f-434b535f2013'
-        event = asyncio.Event()
-
-        await client.start_notify(ubulk, functools.partial(self.handler_2013, None))
-        await client.start_notify(ureq, functools.partial(self.handler_2012, event))
+        download_done = asyncio.Event()
+        results = []
+        await client.start_notify(ubulk, functools.partial(self.handler_2013, results))
+        await client.start_notify(ureq, functools.partial(self.handler_2012, download_done))
         tfrom = 27365606
         tto   = 27366342
         await client.write_gatt_char(ureq, struct.pack('<hII', 0, tfrom, tto))
-        print(f'{self} waiting for bulk data from {tfrom} to {tto}')
-        await event.wait()
-
+        print(f' {self} waiting for bulk data from {tfrom} to {tto}')
+        await download_done.wait()
         await client.stop_notify(ureq)
         await client.stop_notify(ubulk)
         await client.disconnect()
+        return results
 
     def handler_2012(self, finished, handle, data):
         # print(f"VR < handle={handle} data={data}")
@@ -140,14 +143,24 @@ class Govee_H5179(DeviceFilter):
         else:
             print(f'unknown download status: {v}!')
 
+    def index_to_ts(self, index):
+        return datetime.fromtimestamp(index*60)
+
     def handler_2013(self, results, handle, data):
         # print(f"VR < handle={handle} data={data}")
         index, t1, h1, t2, h2, t3, h3, t4, h4 = struct.unpack("<ihhhhhhhh", data)
-        ts = datetime.fromtimestamp(index*60)
+        ts = self.index_to_ts(index)
         if t1 == -1:
             print(f' {index} {ts} --      t1={t2/100} t2={t3/100} t3={t4/100}')
+            results.append((index+2, t4/100, h4/100))
+            results.append((index+1, t3/100, h3/100))
+            results.append((index+0, t2/100, h2/100))
         else:
             print(f' {index} {ts} t1={t1/100} t2={t2/100} t3={t3/100} t4={t4/100}')
+            results.append((index+3, t4/100, h4/100))
+            results.append((index+2, t3/100, h3/100))
+            results.append((index+1, t2/100, h2/100))
+            results.append((index+0, t1/100, h1/100))
 
 
 def detection_callback(checkers, known_devices, devq, device, advertisement_data):
@@ -160,10 +173,10 @@ def detection_callback(checkers, known_devices, devq, device, advertisement_data
 
     for c in checkers:
         if c.accept(device, advertisement_data):
-            print(device.address, "RSSI:", device.rssi, advertisement_data)
+            # print(device.address, "RSSI:", device.rssi, advertisement_data)
 
             kd = c(device, advertisement_data)
-            print(kd)
+            print(f" Found {kd}")
             known_devices.append(kd)
             kd.advertisement(advertisement_data)
             devq.put_nowait(kd)
@@ -174,6 +187,8 @@ async def main():
     checkers = [Govee_H5174, Govee_H5179]
     known_devices = []
     devq = asyncio.Queue()
+
+    print("Scanning for devices")
     scanner = BleakScanner()
     detection_cb = functools.partial(detection_callback, checkers, known_devices, devq)
     scanner.register_detection_callback(detection_cb)
@@ -186,13 +201,12 @@ async def main():
 
     print("Stopped scanning, discovered the following:")
     for d in scanner.discovered_devices:
-        print(d)
+        print(f' {d}')
 
     devq.put_nowait(None)
     await t1
 
 async def probe_devs(queue):
-    print('bg worker')
     while True:
         try:
             d = await queue.get()
@@ -203,8 +217,9 @@ async def probe_devs(queue):
             md = await d.get_meta()
             print(f"{d} metadata: {md}")
             print(f"Starting download from {d}")
-            print(await d.do_download())
-
+            results = await d.do_download()
+            for r in results:
+                print(f'  {d.index_to_ts(r[0])}  {r[1]}℃  {r[2]}%rh')
             queue.task_done()
         except Exception:
             logging.exception("ohno")

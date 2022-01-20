@@ -9,8 +9,8 @@ import struct
 def stripnull(data: bytes):
     return data.rstrip(b'\0').decode('UTF-8')
 
-def gvchk(data: bytes):
-    if type(data) is not bytes:
+def gv_rx_chk(data: bytes):
+    if type(data) not in (bytes, bytearray):
         raise ValueError(f"Expected 'bytes' input, got {type(data)}")
     if len(data) != 20:
         raise ValueError(f"Expected 20 byte input, got {len(data)} bytes")
@@ -21,6 +21,19 @@ def gvchk(data: bytes):
         return data[:-1]
     raise ValueError(f"Incorrect checksum found {data[-1]} calculated {chk&0xFF}")
 
+def gv_tx_chk(data: bytes):
+    if type(data) is str:
+        data = bytes.fromhex(data)
+    if type(data) not in (bytes, bytearray):
+        raise ValueError(f"Expected 'bytes' input, got {type(data)}")
+    if len(data) >= 20:
+        raise ValueError(f"Expected <20 bytes, got {len(data)} bytes")
+
+    data = data + b"\x00" * (19-len(data)) # right-pad with nulls
+    chk = 0
+    for i in range(len(data)):
+        chk = chk ^ int(data[i])
+    return data + bytes([chk & 0xff])
 
 class DeviceFilter():
     @staticmethod
@@ -36,6 +49,13 @@ class DeviceFilter():
         self.ads = set()
 
     async def get_meta(self):
+        client = BleakClient(self.device.address, timeout=30)
+        await client.connect()
+        meta = await self.get_meta_from_client(client)
+        await client.disconnect()
+        return meta
+
+    async def get_meta_from_client(self, client):
         return {}
 
     async def do_download(self):
@@ -68,6 +88,29 @@ class Govee_H5174(DeviceFilter):
         self.ads.add(dx)
         return {'temp': temp, 'humid': humid, 'bat': dx[5]}
 
+    async def get_meta_from_client(self, client):
+        umisc = '494e5445-4c4c-495f-524f-434b535f2011'
+        meta = {}
+        print('interrogating 5174')
+        await client.start_notify(umisc, functools.partial(self.handler_2011, meta))
+        await client.write_gatt_char(umisc, gv_tx_chk("AA0D"))
+        await asyncio.sleep(0.1)
+        await client.write_gatt_char(umisc, gv_tx_chk("AA0E"))
+        await asyncio.sleep(2.0)
+        await client.stop_notify(umisc)
+        return meta
+
+    def handler_2011(self, meta, handle, data):
+        print(f"VR < handle={handle} data={data}")
+        data = gv_rx_chk(data)
+        msgtype = data[0:2]
+        value = data[2:]
+        if msgtype == bytes.fromhex('AA0D'):
+            meta['hardware'] = stripnull(value)
+        elif msgtype == bytes.fromhex('AA0E'):
+            meta['firmware'] = stripnull(value)
+        else:
+            print("!! unknown response")
 
 class Govee_H5179(DeviceFilter):
     # device has Wifi, bluetooth,
@@ -94,24 +137,22 @@ class Govee_H5179(DeviceFilter):
         return {}
 
 
-    async def get_meta(self):
-        client = BleakClient(self.device.address, timeout=30)
-        await client.connect()
+    async def get_meta_from_client(self, client):
         umisc = '494e5445-4c4c-495f-524f-434b535f2011'
         meta = {}
         await client.start_notify(umisc, functools.partial(self.handler_2011, meta))
-        #await client.write_gatt_char(umisc, bytes.fromhex("AA2000000000000000000000000000000000008A"))
-        await client.write_gatt_char(umisc, bytes.fromhex("AA0D0000000000000000000000000000000000A7"))
-        await client.write_gatt_char(umisc, bytes.fromhex("AA0E0000000000000000000000000000000000A7"))
+        await client.write_gatt_char(umisc, gv_tx_chk("AA20"))
+        await client.write_gatt_char(umisc, gv_tx_chk("AA0D"))
+        await client.write_gatt_char(umisc, gv_tx_chk("AA0E"))
         await asyncio.sleep(0.5)
         await client.stop_notify(umisc)
-        await client.disconnect()
         return meta
 
     def handler_2011(self, meta, handle, data):
         print(f"VR < handle={handle} data={data}")
+        data = gv_rx_chk(data)
         msgtype = data[0:2]
-        value = gvchk(data)
+        value = data[2:]
         if msgtype == bytes.fromhex('AA20'):
             meta['aa20_ver'] = stripnull(value)
         elif msgtype == bytes.fromhex('AA0D'):

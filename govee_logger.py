@@ -6,8 +6,21 @@ import functools
 import struct
 
 
-def stripnull(data):
+def stripnull(data: bytes):
     return data.rstrip(b'\0').decode('UTF-8')
+
+def gvchk(data: bytes):
+    if type(data) is not bytes:
+        raise ValueError(f"Expected 'bytes' input, got {type(data)}")
+    if len(data) != 20:
+        raise ValueError(f"Expected 20 byte input, got {len(data)} bytes")
+    chk = 0
+    for i in range(len(data) - 1):
+        chk = chk ^ int(data[i])
+    if chk & 0xff == data[-1]:
+        return data[:-1]
+    raise ValueError(f"Incorrect checksum found {data[-1]} calculated {chk&0xFF}")
+
 
 class DeviceFilter():
     @staticmethod
@@ -98,7 +111,7 @@ class Govee_H5179(DeviceFilter):
     def handler_2011(self, meta, handle, data):
         print(f"VR < handle={handle} data={data}")
         msgtype = data[0:2]
-        value = data[2:-1] # dump checksum
+        value = gvchk(data)
         if msgtype == bytes.fromhex('AA20'):
             meta['aa20_ver'] = stripnull(value)
         elif msgtype == bytes.fromhex('AA0D'):
@@ -224,6 +237,8 @@ async def probe_devs(queue):
         except Exception:
             logging.exception("ohno")
 
-asyncio.run(main())
+
+if __name__ == "__main__":
+    asyncio.run(main())
 
 

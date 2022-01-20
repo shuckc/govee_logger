@@ -43,7 +43,7 @@ Channel `494e5445-4c4c-495f-524f-434b535f2011` is used to query firmware and sof
 Real-time temperature readings are send in annoucement broadcasts
 
 Historical replay uses two channels: make requests on xx2012 and receive readings on xx2013.
-Data is indexed by a timestamp, which is `UNIX timestamp / 60` with a skew of 0xA65
+Data is indexed by a timestamp, which is `UNIX timestamp / 60`.
 Most results rows have 4 entries, some have 3 with the first 4 bytes being 0xFFFFFFFF
 
     handle 0x002e    (xxxx2012)
@@ -106,8 +106,13 @@ Write request to `xx2012`:
         WR > 0x3302 0000 ...    unsure meaning, all zero
         VN < 0x3302 0000 ....
 
-        WR > 0x3301 1c9b 0000 0000 0000 0000 0000 0000 0000 00B5   request index from 1c9b
+        WR > 0x3301 1c9b 0000 0000 0000 0000 0000 0000 0000 00B5   request index from 1c9b to 0000
         VN < 0x3301 0000 0000 0000 0000 0000 0000 0000 0000 0032   starting?
+
+Sometimes the index range end is non-zero (7081-0001):
+
+        WR > 0x3301 7081 0001 0000 0000 0000 0000 0000 0000 00c2
+
 
 Bulk VNs recieved on `xx2013`, then:
 
@@ -131,6 +136,7 @@ Bulk data
                     1111 1122 2222 3333 3344 4444 5555 5566 6666
         VN < 0x1C29                                                 index now 6 previous
 
+All payload rows seem to have 6 entries.
 
 With thanks to
 ----

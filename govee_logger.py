@@ -37,15 +37,15 @@ def gv_tx_chk(data: bytes):
 
 class DeviceFilter():
     @staticmethod
-    def accept(device, advertisement_data) -> bool:
+    def accept(device, advertisement) -> bool:
         return False
 
     def advertisement(self, advertisement) -> None:
         pass
 
-    def __init__(self, device, advertisement_data):
+    def __init__(self, device, advertisement):
         self.device = device
-        self.advertisement_data = advertisement_data
+        self.advertisement_data = advertisement
         self.ads = set()
 
     async def get_meta(self):
@@ -59,6 +59,13 @@ class DeviceFilter():
         return {}
 
     async def do_download(self):
+        client = BleakClient(self.device.address, timeout=30)
+        await client.connect()
+        meta = await self.do_download_from_client(client)
+        await client.disconnect()
+        return meta
+
+    async def do_download_from_client(self, client):
         return []
 
     def __repr__(self):
@@ -68,8 +75,8 @@ class Govee_H5174(DeviceFilter):
     # device has bluetooth
     # reads temperature and humidity
     @staticmethod
-    def accept(device, advertisement_data) -> bool:
-        name = advertisement_data.local_name
+    def accept(device, advertisement) -> bool:
+        name = advertisement.local_name
         return name is not None and name.startswith("GVH5174_")
 
     def __repr__(self):
@@ -116,8 +123,8 @@ class Govee_H5179(DeviceFilter):
     # device has Wifi, bluetooth,
     # temperature and humidity
     @staticmethod
-    def accept(device, advertisement_data) -> bool:
-        name = advertisement_data.local_name
+    def accept(device, advertisement) -> bool:
+        name = advertisement.local_name
         return name is not None and name.startswith("Govee_H5179_")
 
     def __repr__(self):
@@ -163,9 +170,7 @@ class Govee_H5179(DeviceFilter):
             print("!! unknown response")
 
 
-    async def do_download(self):
-        client = BleakClient(self.device.address, timeout=30)
-        res = await client.connect()
+    async def do_download_from_client(self, client):
         print(f' {self} connected for download')
         ureq = '494e5445-4c4c-495f-524f-434b535f2012'
         ubulk = '494e5445-4c4c-495f-524f-434b535f2013'
@@ -180,7 +185,6 @@ class Govee_H5179(DeviceFilter):
         await download_done.wait()
         await client.stop_notify(ureq)
         await client.stop_notify(ubulk)
-        await client.disconnect()
         return results
 
     def handler_2012(self, finished, handle, data):

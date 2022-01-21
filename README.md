@@ -100,14 +100,14 @@ Setting clock:
 
 Write request to `xx2012`:
 
-        WR > 0xAA01 0000 0000 0000 0000 0000 0000 0000 0000 00AB   ?
+        WR > 0xAA01 0000 0000 0000 0000 0000 0000 0000 0000 00AB   ??
         VN < 0xAA01 0792 1292 6400 0000 0000 0000 0000 0000 00CA
 
         WR > 0x3302 0000 ...    unsure meaning, all zero
         VN < 0x3302 0000 ....
 
         WR > 0x3301 1c9b 0000 0000 0000 0000 0000 0000 0000 00B5   request index from 1c9b to 0000
-        VN < 0x3301 0000 0000 0000 0000 0000 0000 0000 0000 0032   starting?
+        VN < 0x3301 0000 0000 0000 0000 0000 0000 0000 0000 0032   download starting
 
 Sometimes the index range end is non-zero (7081-0001):
 
@@ -116,7 +116,11 @@ Sometimes the index range end is non-zero (7081-0001):
 
 Bulk VNs recieved on `xx2013`, then:
 
-        VN < 0xEE01 04C5 0000 0000 0000 0000 0000 0000 0000 00     download complete, poss timestamp of 0?
+        VN < 0xEE01 04C5 0000 0000 0000 0000 0000 0000 0000 00xx   download complete
+
+    another time:
+        VN < 0xee01 0d8b 0000 0000 0000 0000 0000 0000 0000 0069   download complete
+
 
      later 09:43:04
         WR > 0xAA01 0000 0000 0000 0000 0000 0000 0000 0000 00AB   ?
@@ -136,7 +140,30 @@ Bulk data
                     1111 1122 2222 3333 3344 4444 5555 5566 6666
         VN < 0x1C29                                                 index now 6 previous
 
-All payload rows seem to have 6 entries.
+Usually payload rows have 6 entries, very rarely 0xFFFFFF values occur for multiple readings and the index
+moves by fewer than expected. Suspected FIFO buffer underun in the device:
+
+    index 3-byte temp/humidity values (humidity=t%1000, temp=t/1000)
+    20838 t0=190473 t1=189473 t2=189474 t3=189474 t4=189474 t5=189475
+    20832 t0=189475 t1=188475 t2=188476 t3=188476 t4=188476 t5=188477
+    20826 t0=188477 t1=188477 t2=187477 t3=187478 t4=187478 t5=186479
+    20820 t0=186479 t1=186479 t2=186479 t3=186480 t4=186480 t5=185480
+    20814 t0=185481 t1=16777215 t2=16777215 t3=16777215 t4=16777215 t5=16777215  <== values skipped
+    20813 t0=185481 t1=185481 t2=184481 t3=184482 t4=184482 t5=184482
+    20807 t0=184483 t1=184483 t2=183483 t3=183484 t4=183484 t5=183486
+    20801 t0=183487 t1=183486 t2=183488 t3=183487 t4=182487 t5=182488
+    20795 t0=182488 t1=182488 t2=182488 t3=182488 t4=181488 t5=181488
+
+
+The end of a download can skip values too, ie:
+
+       18 t0=189433 t1=189434 t2=189434 t3=189435 t4=189435 t5=189436
+       12 t0=188437 t1=188437 t2=188437 t3=188437 t4=188438 t5=188438
+        6 t0=188439 t1=188439 t2=188439 t3=188439 t4=188440 t5=188440
+        0 t0=188440 t1=16777215 t2=16777215 t3=16777215 t4=16777215 t5=16777215
+    VR < handle=20 data=ee010709000000000000000000000000000000e1
+    Download complete
+
 
 With thanks to
 ----

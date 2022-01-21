@@ -75,7 +75,28 @@ class DeviceFilter:
         return f"?? {self.device}"
 
 
-class Govee_H5174(DeviceFilter):
+class Govee_Device(DeviceFilter):
+    umisc = "494e5445-4c4c-495f-524f-434b535f2011"
+    ureq = "494e5445-4c4c-495f-524f-434b535f2012"
+    ubulk = "494e5445-4c4c-495f-524f-434b535f2013"
+
+
+    def handler_2011(self, meta, handle, data):
+        print(f"VR < handle={handle} data={data}")
+        data = gv_rx_chk(data)
+        msgtype = data[0:2]
+        value = data[2:]
+        if msgtype == bytes.fromhex("AA20"):
+            meta["aa20_ver"] = stripnull(value)
+        elif msgtype == bytes.fromhex("AA0D"):
+            meta["hardware"] = stripnull(value)
+        elif msgtype == bytes.fromhex("AA0E"):
+            meta["firmware"] = stripnull(value)
+        else:
+            print("!! unknown response")
+
+
+class Govee_H5174(Govee_Device):
     # device has bluetooth
     # reads temperature and humidity
     @staticmethod
@@ -100,31 +121,73 @@ class Govee_H5174(DeviceFilter):
         return {"temp": temp, "humid": humid, "bat": dx[5]}
 
     async def get_meta_from_client(self, client):
-        umisc = "494e5445-4c4c-495f-524f-434b535f2011"
         meta = {}
         print("interrogating 5174")
-        await client.start_notify(umisc, functools.partial(self.handler_2011, meta))
-        await client.write_gatt_char(umisc, gv_tx_chk("AA0D"))
-        await asyncio.sleep(0.1)
-        await client.write_gatt_char(umisc, gv_tx_chk("AA0E"))
+        await client.start_notify(
+            self.umisc, functools.partial(self.handler_2011, meta)
+        )
+        await client.write_gatt_char(self.umisc, gv_tx_chk("AA0D"))
+        await client.write_gatt_char(self.umisc, gv_tx_chk("AA0E"))
         await asyncio.sleep(2.0)
-        await client.stop_notify(umisc)
+        await client.stop_notify(self.umisc)
         return meta
 
-    def handler_2011(self, meta, handle, data):
-        print(f"VR < handle={handle} data={data}")
+
+    async def do_download_from_client(self, client):
+        print(f" {self} connected for download")
+        download_done = asyncio.Event()
+        results = []
+        await client.start_notify(
+            self.ubulk, functools.partial(self.handler_2013, results)
+        )
+        await client.start_notify(
+            self.ureq, functools.partial(self.handler_2012, download_done)
+        )
+        tfrom = 10800
+        tto = 0
+        await client.write_gatt_char(self.ureq, gv_tx_chk(struct.pack(">hhh", 0x3301, tfrom, tto)))
+        print(f" {self} waiting for bulk data from {tfrom} to {tto}")
+        await download_done.wait()
+        await client.stop_notify(self.ureq)
+        await client.stop_notify(self.ubulk)
+        return results
+
+    def handler_2012(self, finished, handle, data):
+        print(f"VR < handle={handle} data={data.hex()}")
         data = gv_rx_chk(data)
         msgtype = data[0:2]
         value = data[2:]
-        if msgtype == bytes.fromhex("AA0D"):
-            meta["hardware"] = stripnull(value)
-        elif msgtype == bytes.fromhex("AA0E"):
-            meta["firmware"] = stripnull(value)
+        if msgtype == bytes.fromhex("3301"):
+            print("Download accepted")
+            #finished.set()
+        elif msgtype == bytes.fromhex("ee01"):
+            print("Download complete")
+            finished.set()
         else:
-            print("!! unknown response")
+            print(f"unknown download status: {data.hex()}!")
 
+    def index_to_ts(self, index):
+        return datetime.fromtimestamp(index * 60)
 
-class Govee_H5179(DeviceFilter):
+    def handler_2013(self, results, handle, data):
+        # print(f"VR < handle={handle} data={data}")
+        # VN < 0x1C2F 02D8 6402 D864 02D8 6402 d864 02d8 6402 d864    index + 6 data readings
+        # unpack 3-byte sections
+        index, = struct.unpack(">h", data[0:2])
+        ts = []
+        for i in range(6):
+            t0, = struct.unpack(">i", bytes([0]) + data[2+i*3:5+i*3])
+            ts.append(t0)
+
+        # ts = self.index_to_ts(index)
+        #if t1 == -1:
+        print(f" {index} --      t0={ts[0]} t1={ts[1]} t2={ts[2]} t3={ts[3]} t4={ts[4]} t5={ts[5]}")
+        # results.append((index + 3, t4 / 100, h4 / 100))
+        # results.append((index + 2, t3 / 100, h3 / 100))
+        # results.append((index + 1, t2 / 100, h2 / 100))
+        # results.append((index + 0, t1 / 100, h1 / 100))
+
+class Govee_H5179(Govee_Device):
     # device has Wifi, bluetooth,
     # temperature and humidity
     @staticmethod
@@ -149,47 +212,34 @@ class Govee_H5179(DeviceFilter):
         return {}
 
     async def get_meta_from_client(self, client):
-        umisc = "494e5445-4c4c-495f-524f-434b535f2011"
         meta = {}
-        await client.start_notify(umisc, functools.partial(self.handler_2011, meta))
-        await client.write_gatt_char(umisc, gv_tx_chk("AA20"))
-        await client.write_gatt_char(umisc, gv_tx_chk("AA0D"))
-        await client.write_gatt_char(umisc, gv_tx_chk("AA0E"))
+        await client.start_notify(
+            self.umisc, functools.partial(self.handler_2011, meta)
+        )
+        await client.write_gatt_char(self.umisc, gv_tx_chk("AA20"))
+        await client.write_gatt_char(self.umisc, gv_tx_chk("AA0D"))
+        await client.write_gatt_char(self.umisc, gv_tx_chk("AA0E"))
         await asyncio.sleep(0.5)
-        await client.stop_notify(umisc)
+        await client.stop_notify(self.umisc)
         return meta
-
-    def handler_2011(self, meta, handle, data):
-        print(f"VR < handle={handle} data={data}")
-        data = gv_rx_chk(data)
-        msgtype = data[0:2]
-        value = data[2:]
-        if msgtype == bytes.fromhex("AA20"):
-            meta["aa20_ver"] = stripnull(value)
-        elif msgtype == bytes.fromhex("AA0D"):
-            meta["hardware"] = stripnull(value)
-        elif msgtype == bytes.fromhex("AA0E"):
-            meta["firmware"] = stripnull(value)
-        else:
-            print("!! unknown response")
 
     async def do_download_from_client(self, client):
         print(f" {self} connected for download")
-        ureq = "494e5445-4c4c-495f-524f-434b535f2012"
-        ubulk = "494e5445-4c4c-495f-524f-434b535f2013"
         download_done = asyncio.Event()
         results = []
-        await client.start_notify(ubulk, functools.partial(self.handler_2013, results))
         await client.start_notify(
-            ureq, functools.partial(self.handler_2012, download_done)
+            self.ubulk, functools.partial(self.handler_2013, results)
+        )
+        await client.start_notify(
+            self.ureq, functools.partial(self.handler_2012, download_done)
         )
         tfrom = 27365606
         tto = 27366342
-        await client.write_gatt_char(ureq, struct.pack("<hII", 0, tfrom, tto))
+        await client.write_gatt_char(self.ureq, struct.pack("<hII", 0, tfrom, tto))
         print(f" {self} waiting for bulk data from {tfrom} to {tto}")
         await download_done.wait()
-        await client.stop_notify(ureq)
-        await client.stop_notify(ubulk)
+        await client.stop_notify(self.ureq)
+        await client.stop_notify(self.ubulk)
         return results
 
     def handler_2012(self, finished, handle, data):
@@ -204,7 +254,7 @@ class Govee_H5179(DeviceFilter):
             print("Download request failed! (lower bound too low?)")
             finished.set()
         else:
-            print(f"unknown download status: {v}!")
+            print(f"unknown download status: {data}!")
 
     def index_to_ts(self, index):
         return datetime.fromtimestamp(index * 60)
